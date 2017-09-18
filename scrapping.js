@@ -9,14 +9,13 @@ let cse_url = 'http://cse.cau.ac.kr/20141201/sub05/sub0501.php';
 let csedb = 'db/cse.db';
 let accord_url = 'http://cse.cau.ac.kr/20141201/sub04/sub0403.php';
 let accorddb = 'db/accord.db';
-let cau_url = 'https://www.cau.ac.kr/04_ulife/causquare/notice/notice_list.php?bbsId=cau_notice';
-let caudb = 'db/cau.db';
-let dor_url = 'http://dormitory.cau.ac.kr/bbs/bbs_list.php?bbsID=notice';
-let dordb = 'db/dor.db';
 logger=require('./logger.js').logger('log/scrapping.log');
 let request = require('request');
 let cheerio = require('cheerio');
-let databasejs = require('./database.js');
+let moment = require('moment');
+let fs = require('fs');
+let data = {};
+let old_data = require('./data/old_data.json');
 
 // Read ICT Page
 
@@ -41,9 +40,9 @@ function parseIct(body){
         postElements.each(function () {
             let children = $(this).children();
             let row = {
-                'number': Number($(children[0]).find('a').attr('href').replace(/[^0-9]/g, '')),
+                'url': ict_url+'?cmd=view&idx='+$(children[0]).find('a').attr('href').replace(/[^0-9]/g,''),
                 'title': $(children[1]).text().replace(/[\n\t\r]/g, ''),
-                'date': $(children[2]).text()
+                'last_update' : $(children[2]).text()
             };
             postarray.push(row);
         });
@@ -52,15 +51,8 @@ function parseIct(body){
 }
 function pushIct(postarray){
     return new Promise(function(resolve, reject) {
-        databasejs.getDB(ictdb).then(function (database) {
-            database.serialize(function () {
-                postarray.forEach(function (value) {
-                    databasejs.insertPostsData(database, value);
-                });
-            });
-            database.close();
-            resolve(postarray.length);
-        });
+        data['ict'] = postarray;
+        resolve();
     });
 }
 function requestCse(){
@@ -84,9 +76,9 @@ function parseCse(body){
         postElements.each(function (){
             let children = $(this).children();
             let row = {
-                'number':Number($(children[2]).find('a').attr('href').match(/uid=(\d+)/g)[0].replace(/[^0-9]/g,'')),
+                'url' : cse_url + $(children[2]).find('a').attr('href'),
                 'title': $(children[2]).text().replace(/[\n\t\r]/g,''),
-                'date' : $(children[4]).text()
+                'last_update' : $(children[4]).text()
             };
             postarray.push(row);
         });
@@ -95,15 +87,8 @@ function parseCse(body){
 }
 function pushCse(postarray){
     return new Promise(function(resolve, reject) {
-        databasejs.getDB(csedb).then(function (database) {
-            database.serialize(function () {
-                postarray.forEach(function (value) {
-                    databasejs.insertPostsData(database, value);
-                });
-            });
-            database.close();
-            resolve(postarray.length);
-        });
+        data['cse'] = postarray;
+        resolve();
     });
 }
 function requestAccord(){
@@ -127,9 +112,9 @@ function parseAccord(body){
         postElements.each(function (){
             let children = $(this).children();
             let row = {
-                'number':Number($(children[2]).find('a').attr('href').match(/uid=(\d+)/g)[0].replace(/[^0-9]/g,'')),
+                'url': accord_url+$(children[2]).find('a').attr('href'),
                 'title': $(children[2]).text().replace(/[\n\t\r]/g, ''),
-                'date' : $(children[4]).text()
+                'last_update' : $(children[4]).text()
             };
             postarray.push(row);
         });
@@ -138,159 +123,77 @@ function parseAccord(body){
 }
 function pushAccord(postarray){
     return new Promise(function(resolve, reject) {
-        databasejs.getDB(accorddb).then(function (database) {
-            database.serialize(function () {
-                postarray.forEach(function (value) {
-                    databasejs.insertPostsData(database, value);
-                });
-            });
-            database.close();
-            resolve(postarray.length);
-        });
+        data['accord'] = postarray;
+        resolve();
     });
+}
+function filter_date(){
+    let today = moment().format('YYYY.MM.DD');
+    data['ict'] = data['ict'].filter(function(item){return item['last_update']==today;})
+    data['cse'] = data['cse'].filter(function(item){return item['last_update']==today;})
+    data['accord'] = data['accord'].filter(function(item){return item['last_update']==today;})
 }
 
-function requestCau(){
-    return new Promise(function(resolve, reject) {
-        let webdriver = require('selenium-webdriver');
-        let By = webdriver.By;
-        let body;
-        let driver = new webdriver.Builder()
-            .forBrowser('chrome')
-            .build();
-        driver.get(cau_url)
-            .then(function () {
-                body = driver.findElement(By.tagName('body')).getAttribute('innerHTML');
-            })
-            .then(function () {
-                driver.quit();
-                resolve(body);
-            });
-    });
+function filter_old(){
+    data['ict'] = data['ict'].filter(function(item){return !old['ict'].some(function(obj){return obj.title==item.title;})});
+    data['cse'] = data['cse'].filter(function(item){return !old['cse'].some(function(obj){return obj.title==item.title;})});
+    data['accord'] = data['accord'].filter(function(item){return !old['accord'].some(function(obj){return obj.title==item.title;})});
 }
-function parseCau(body){
-    let postarray=[];
-    return new Promise(function(resolve, reject){
-        let $ = cheerio.load(body, {
-            normalizeWhitespace: true
-        });
-        let postElements = $('table.bbslist tbody tr');
-        postElements.each(function(){
-            let children = $(this).children();
-            let row = {
-                'number':Number($(children[1]).find('a').attr('href').replace(/[^0-9]/g,'')),
-                'title': $(children[1]).text().replace(/[\n\t\r]/g, ''),
-                'date': $(children[2]).text()
-            };
-            postarray.push(row);
-        });
-        resolve(postarray);
-    });
+function update_old(){
+    old_data['ict'] = old_data['ict'].concat(data['ict']);
+    old_data['cse'] = old_data['cse'].concat(data['cse']);
+    old_data['accord'] = old_data['accord'].concat(data['accord']);
 }
-function pushCau(postarray){
-    return new Promise(function(resolve, reject) {
-        databasejs.getDB(caudb).then(function (database) {
-            database.serialize(function () {
-                postarray.forEach(function (value) {
-                    databasejs.insertPostsData(database, value);
-                });
-            });
-            database.close();
-            resolve(postarray.length);
-        });
-    });
-}
-function requestDor(){
-    return new Promise(function(resolve, reject) {
-        let webdriver = require('selenium-webdriver');
-        let By = webdriver.By;
-        let body;
-        let driver = new webdriver.Builder()
-            .forBrowser('chrome')
-            .build();
-        driver.get(dor_url)
-            .then(function () {
-                body = driver.findElement(By.tagName('body')).getAttribute('innerHTML');
-            })
-            .then(function () {
-                driver.quit();
-                resolve(body);
-            });
-    });
-}
-function parseDor(body){
-    let postarray=[];
-    return new Promise(function(resolve, reject){
-        let $ = cheerio.load(body, {
-            normalizeWhitespace: true
-        });
-        let postElements = $('table.tbl_board tbody tr');
-        postElements.each(function (){
-            let children = $(this).children();
-            if(children.text()==='' || $(children[0]).text()==='번호'){
-                return;
-            }
-            let row = {
-                'number':Number($(children[1]).find('a').attr('href').replace(/[^0-9]/g,'')),
-                'title': $(children[1]).text().replace(/[\n\t\r]/g, ''),
-                'date' : $(children[4]).text()
-            };
-            postarray.push(row);
-        });
-        resolve(postarray);
-    });
-}
-function pushDor(postarray){
-    return new Promise(function(resolve, reject) {
-        databasejs.getDB(dordb).then(function (database) {
-            database.serialize(function () {
-                postarray.forEach(function (value) {
-                    databasejs.insertPostsData(database, value);
-                });
-            });
-            database.close();
-            resolve(postarray.length);
-        });
-    });
-}
+
 
 function _update() {
+    let ict = new Promise(function(resolve, reject){
     requestIct()
         .then(parseIct)
         .then(pushIct)
+        .then(function(){
+            resolve();
+        })
         .catch(function(error){
             logger.log('error', error);
         });
+    });
+    let cse = new Promise(function(resolve, reject){
     requestCse()
         .then(parseCse)
         .then(pushCse)
+        .then(function(){
+            resolve();
+            })
         .catch(function(error){
             logger.log('error', error);
         });
-    requestAccord()
+    });
+    let accord = new Promise(function(resolve, reject){
+        requestAccord()
         .then(parseAccord)
         .then(pushAccord)
+            .then(function(){
+                resolve();
+            })
         .catch(function(error){
             logger.log('error', error);
         });
-    requestCau()
-        .then(parseCau)
-        .then(pushCau)
-        .catch(function(error){
-           logger.log('error', error);
-        });
-    requestDor()
-        .then(parseDor)
-        .then(pushDor)
-        .catch(function(error){
-            logger.log('error', error);
-        });
+    })
+    Promise.all([ict, cse, accord]).then(function(){
+        filter_date();
+        filter_old();
+        fs.writeFileSync('data/data.json', JSON.stringify(data),'utf8');
+        update_old();
+        fs.writeFileSync('data/old_data.json', JSON.stringify(old_data), 'utf8');
+    });
 }
 
 exports.update=_update;
+_update();
 let schedule = require('node-schedule');
 let rule = new schedule.RecurrenceRule();
-rule.minute = new schedule.Range(0,59,2);
+rule.minute = new schedule.Range(0,59,1);
 schedule.scheduleJob(rule, function() {
     logger.log('info', 'cronjob start update');
     _update();
